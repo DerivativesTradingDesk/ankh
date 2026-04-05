@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quadrivium Market Dashboard</title>
+    <style>
+        :root {
+            --bg: #050505;
+            --card-bg: #111111;
+            --up: #00ff88;
+            --down: #ff4444;
+            --border: #222;
+            --text: #ffffff;
+            --accent: #00d4ff;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--accent);
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        /* The Card */
+        .ticker-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+            position: relative;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        /* The Flickering/Pulse Effect on Update */
+        .update-pulse-up { animation: pulse-up 0.5s; }
+        .update-pulse-down { animation: pulse-down 0.5s; }
+
+        @keyframes pulse-up {
+            0% { background-color: rgba(0, 255, 136, 0.2); }
+            100% { background-color: var(--card-bg); }
+        }
+        @keyframes pulse-down {
+            0% { background-color: rgba(255, 68, 68, 0.2); }
+            100% { background-color: var(--card-bg); }
+        }
+
+        .symbol { font-size: 1.2rem; color: var(--accent); font-weight: bold; }
+        .price { font-size: 2.2rem; font-family: 'Courier New', monospace; margin: 10px 0; font-weight: bold; }
+        .change { font-size: 1rem; font-weight: 600; }
+        
+        .up { color: var(--up); }
+        .down { color: var(--down); }
+
+        #status-bar { 
+            position: fixed; 
+            bottom: 0; 
+            left: 0; 
+            width: 100%; 
+            background: #111; 
+            padding: 5px 20px; 
+            font-size: 0.7rem; 
+            color: #555; 
+            border-top: 1px solid #222;
+        }
+
+        .live-tag {
+            background: var(--down);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.6rem;
+            vertical-align: middle;
+            margin-left: 10px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1 style="margin:0">QUADRIVIUM <span style="color:var(--accent)">COMMAND</span></h1>
+    </div>
+    <div id="connection-status">
+        <span class="live-tag">LIVE WS</span>
+    </div>
+</header>
+
+<div class="grid" id="main-grid">
+    </div>
+
+<div id="status-bar">System Status: Awaiting Data...</div>
+
+<script>
+    // 🔑 YOUR FINNHUB KEY IS BAKED IN
+    const API_KEY = 'cot4gfhr01qgmopn3va0cot4gfhr01qgmopn3vag';
+    
+    // Customize your watchlist here
+    const WATCHLIST = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'META', 'SPY', 'QQQ'];
+    const socket = new WebSocket(`wss://ws.finnhub.io?token=${API_KEY}`);
+
+    // Initial Setup: Create the cards
+    function createCards() {
+        const grid = document.getElementById('main-grid');
+        WATCHLIST.forEach(sym => {
+            const id = sym.replace(/[^a-z0-9]/gi, '_');
+            const card = document.createElement('div');
+            card.className = 'ticker-card';
+            card.id = `card-${id}`;
+            card.innerHTML = `
+                <div class="symbol">${sym}</div>
+                <div class="price" id="price-${id}">$--.--</div>
+                <div class="change" id="change-${id}">0.00%</div>
+            `;
+            grid.appendChild(card);
+        });
+    }
+
+    // 1. Fetch Initial Data via REST (The "Snapshot")
+    async function fetchSnapshot() {
+        for (const sym of WATCHLIST) {
+            try {
+                const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${API_KEY}`);
+                const data = await res.json();
+                if (data.c) {
+                    updateUI(sym, data.c, data.dp);
+                }
+            } catch (e) { console.error(e); }
+        }
+    }
+
+    // 2. Connect WebSockets (The "Flickering Lights")
+    socket.addEventListener('open', function (event) {
+        WATCHLIST.forEach(sym => {
+            socket.send(JSON.stringify({'type':'subscribe', 'symbol': sym}));
+        });
+        document.getElementById('status-bar').textContent = "WebSocket Connected: Streaming Real-Time Data";
+    });
+
+    socket.addEventListener('message', function (event) {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'trade') {
+            const trade = msg.data[0];
+            // Update the UI with the fresh price from the WebSocket
+            updateUI(trade.s, trade.p);
+        }
+    });
+
+    // 3. Update the UI & Trigger the Flickering Pulse
+    function updateUI(sym, price, percentChange = null) {
+        const id = sym.replace(/[^a-z0-9]/gi, '_');
+        const card = document.getElementById(`card-${id}`);
+        const priceEl = document.getElementById(`price-${id}`);
+        const changeEl = document.getElementById(`change-${id}`);
+        
+        if (!priceEl) return;
+
+        const oldPrice = parseFloat(priceEl.textContent.replace('$', '')) || 0;
+        
+        // Update Price Text
+        priceEl.textContent = `$${price.toFixed(2)}`;
+
+        // Trigger Flicker/Pulse Animation
+        card.classList.remove('update-pulse-up', 'update-pulse-down');
+        void card.offsetWidth; // "Magic" line to reset CSS animation
+        
+        if (price > oldPrice) {
+            card.classList.add('update-pulse-up');
+        } else if (price < oldPrice) {
+            card.classList.add('update-pulse-down');
+        }
+
+        // Update Percent Change (if available from snapshot)
+        if (percentChange !== null) {
+            changeEl.textContent = `${percentChange >= 0 ? '▲' : '▼'} ${Math.abs(percentChange).toFixed(2)}%`;
+            changeEl.className = `change ${percentChange >= 0 ? 'up' : 'down'}`;
+        }
+    }
+
+    // Initialize
+    createCards();
+    fetchSnapshot();
+</script>
+</body>
+</html>
